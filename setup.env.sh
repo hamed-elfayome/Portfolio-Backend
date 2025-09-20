@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Environment Setup Script for AI-Powered Developer Portfolio Site
-# Usage: ./setup.env.sh [dev|prod]
+# Usage: ./setup.env.sh [dev|prod|prod-docker]
 
 set -e
 
@@ -22,18 +22,31 @@ echo "Generated DB_PASSWORD: $DB_PASSWORD"
 
 # Create environment file
 if [ "$ENVIRONMENT" = "prod" ]; then
-    echo "📝 Creating production environment file..."
-    cp .env.production.local .env
+    echo "📝 Creating production environment file (with local services)..."
+    cp .env.production.template .env
+    
+    # Update secrets in .env file
+    sed -i.bak "s/your-super-secret-production-key-here/$SECRET_KEY/g" .env
+    sed -i.bak "s/your-secure-database-password/$DB_PASSWORD/g" .env
+    
+    echo "✅ Production environment configured (local services)!"
+    echo "⚠️  Please update the following in .env file:"
+    echo "   - OPENAI_API_KEY=your-actual-openai-key"
+    echo "   - EMAIL_HOST_USER=your-email@gmail.com"
+    echo "   - EMAIL_HOST_PASSWORD=your-email-password"
+elif [ "$ENVIRONMENT" = "prod-docker" ]; then
+    echo "📝 Creating production environment file (with Docker services)..."
+    cp .env.docker.template .env
     
     # Update secrets in .env file
     sed -i.bak "s/your-super-secret-production-key-here/$SECRET_KEY/g" .env
     sed -i.bak "s/your-secure-database-password/$DB_PASSWORD/g" .env
     
     # Update database password in docker-compose files
-    sed -i.bak "s/F9wm7L4G6vrVoiHdDU_QLw/$DB_PASSWORD/g" docker-compose.yml
-    sed -i.bak "s/F9wm7L4G6vrVoiHdDU_QLw/$DB_PASSWORD/g" docker-compose.prod.yml
+    sed -i.bak "s/POSTGRES_PASSWORD: .*/POSTGRES_PASSWORD: $DB_PASSWORD/g" docker-compose.yml
+    sed -i.bak "s/POSTGRES_PASSWORD: .*/POSTGRES_PASSWORD: $DB_PASSWORD/g" docker-compose.prod.yml
     
-    echo "✅ Production environment configured!"
+    echo "✅ Production environment configured (Docker services)!"
     echo "⚠️  Please update the following in .env file:"
     echo "   - OPENAI_API_KEY=your-actual-openai-key"
     echo "   - EMAIL_HOST_USER=your-email@gmail.com"
