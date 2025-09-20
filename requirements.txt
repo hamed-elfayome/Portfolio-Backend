@@ -32,6 +32,9 @@ Pillow==10.4.0
 # File Processing
 PyPDF2==3.0.1
 
+# System Monitoring
+psutil==5.9.6
+
 # Development
 pytest==7.4.3
 pytest-django==4.7.0

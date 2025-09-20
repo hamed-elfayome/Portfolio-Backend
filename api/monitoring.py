@@ -13,9 +13,16 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status
-import psutil
 import redis
 from openai import OpenAI
+
+# Optional import for system monitoring
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    psutil = None
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +139,14 @@ class HealthChecker:
     def check_system_resources(self):
         """Check system resource usage."""
         try:
+            if not PSUTIL_AVAILABLE:
+                self.checks['system'] = {
+                    'status': 'warning',
+                    'message': 'psutil not available - system monitoring disabled',
+                    'checked_at': timezone.now().isoformat()
+                }
+                return
+            
             cpu_percent = psutil.cpu_percent(interval=1)
             memory = psutil.virtual_memory()
             disk = psutil.disk_usage('/')
@@ -278,9 +293,10 @@ def metrics(request):
                 'job_analyses': JobAnalysis.objects.count(),
             },
             'system': {
-                'cpu_percent': psutil.cpu_percent(),
-                'memory_percent': psutil.virtual_memory().percent,
-                'disk_percent': psutil.disk_usage('/').percent,
+                'cpu_percent': psutil.cpu_percent() if PSUTIL_AVAILABLE else None,
+                'memory_percent': psutil.virtual_memory().percent if PSUTIL_AVAILABLE else None,
+                'disk_percent': psutil.disk_usage('/').percent if PSUTIL_AVAILABLE else None,
+                'psutil_available': PSUTIL_AVAILABLE,
             }
         }
         
