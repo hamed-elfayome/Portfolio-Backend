@@ -668,6 +668,16 @@ wandb/
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
 
+# Internal documentation (not for public repository)
+AI_AGENT_PROMPT.md
+action-plan-complete.md
+plan.md
+progress/
+COMPREHENSIVE_TEST_RESULTS.md
+FINAL_TEST_RESULTS.md
+TESTING_RESULTS.md
+PROJECT_COMPLETION_SUMMARY.md
+
 # Project specific
 # Keep these files but ignore their contents if they contain secrets
 # .env.example (keep this as template)
