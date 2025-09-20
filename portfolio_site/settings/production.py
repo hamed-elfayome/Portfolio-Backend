@@ -219,9 +219,9 @@ REST_FRAMEWORK = {
 # CORS Configuration for production
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [
-    "https://yourdomain.com",
-    "https://www.yourdomain.com",
-    "https://api.yourdomain.com",
+    "https://hamedelfayome.dev",
+    "https://www.hamedelfayome.dev",
+    "https://api.hamedelfayome.dev",
 ]
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [

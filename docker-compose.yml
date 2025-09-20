@@ -1,4 +1,4 @@
-# Docker Compose for Development Environment
+# Docker Compose for AI-Powered Developer Portfolio Site
 version: '3.8'
 
 services:
@@ -6,16 +6,11 @@ services:
     build: .
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
-      - DEBUG=True
       - DB_HOST=db
-      - DB_NAME=portfolio_db
-      - DB_USER=portfolio_user
-      - DB_PASSWORD=password
-      - DB_PORT=5432
       - REDIS_URL=redis://redis:6379/1
-      - SECRET_KEY=dev-secret-key-change-in-production
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
     depends_on:
       - db
       - redis
@@ -37,7 +32,7 @@ services:
     environment:
       POSTGRES_DB: portfolio_db
       POSTGRES_USER: portfolio_user
-      POSTGRES_PASSWORD: password
+      POSTGRES_PASSWORD: F9wm7L4G6vrVoiHdDU_QLw
       POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
     volumes:
       - postgres_data:/var/lib/postgresql/data
