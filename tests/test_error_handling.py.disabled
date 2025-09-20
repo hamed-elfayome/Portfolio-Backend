@@ -1,0 +1,741 @@
+"""
+Comprehensive tests for error handling and validation functionality.
+Tests custom exceptions, input validation, and error recovery.
+"""
+
+import json
+import uuid
+from django.test import TestCase, Client
+from django.core.exceptions import ValidationError
+from rest_framework.test import APIClient
+from rest_framework import status
+from unittest.mock import patch, MagicMock
+from django.core.files.uploadedfile import SimpleUploadedFile
+
+from api.exceptions import (
+    PortfolioAPIException, ValidationError as CustomValidationError,
+    AIServiceError, FileProcessingError, RateLimitExceededError,
+    ResourceNotFoundError, DatabaseError, ExternalServiceError
+)
+from api.validation import InputValidator, APIRequestValidator
+from api.logging_service import APILogger
+from api.monitoring import SystemMonitor, HealthChecker, AlertManager
+from core.models import Profile
+from projects.models import Project
+
+
+class CustomExceptionTest(TestCase):
+    """Test cases for custom exception classes."""
+    
+    def test_portfolio_api_exception(self):
+        """Test PortfolioAPIException base class."""
+        exception = PortfolioAPIException(
+            message="Test error message",
+            error_code="TEST_ERROR",
+            details={"field": "value"}
+        )
+        
+        self.assertEqual(exception.message, "Test error message")
+        self.assertEqual(exception.error_code, "TEST_ERROR")
+        self.assertEqual(exception.details, {"field": "value"})
+        self.assertEqual(str(exception), "Test error message")
+
+    def test_validation_error(self):
+        """Test ValidationError custom exception."""
+        exception = CustomValidationError(
+            message="Validation failed",
+            field="email",
+            value="invalid-email"
+        )
+        
+        self.assertEqual(exception.message, "Validation failed")
+        self.assertEqual(exception.field, "email")
+        self.assertEqual(exception.value, "invalid-email")
+
+    def test_ai_service_error(self):
+        """Test AIServiceError exception."""
+        exception = AIServiceError(
+            message="AI service unavailable",
+            service="openai",
+            operation="embedding"
+        )
+        
+        self.assertEqual(exception.message, "AI service unavailable")
+        self.assertEqual(exception.service, "openai")
+        self.assertEqual(exception.operation, "embedding")
+
+    def test_file_processing_error(self):
+        """Test FileProcessingError exception."""
+        exception = FileProcessingError(
+            message="File processing failed",
+            file_name="test.pdf",
+            file_size=1024
+        )
+        
+        self.assertEqual(exception.message, "File processing failed")
+        self.assertEqual(exception.file_name, "test.pdf")
+        self.assertEqual(exception.file_size, 1024)
+
+    def test_rate_limit_exceeded_error(self):
+        """Test RateLimitExceededError exception."""
+        exception = RateLimitExceededError(
+            message="Rate limit exceeded",
+            limit=100,
+            window="hour"
+        )
+        
+        self.assertEqual(exception.message, "Rate limit exceeded")
+        self.assertEqual(exception.limit, 100)
+        self.assertEqual(exception.window, "hour")
+
+    def test_resource_not_found_error(self):
+        """Test ResourceNotFoundError exception."""
+        exception = ResourceNotFoundError(
+            message="Resource not found",
+            resource_type="profile",
+            resource_id="123"
+        )
+        
+        self.assertEqual(exception.message, "Resource not found")
+        self.assertEqual(exception.resource_type, "profile")
+        self.assertEqual(exception.resource_id, "123")
+
+    def test_database_error(self):
+        """Test DatabaseError exception."""
+        exception = DatabaseError(
+            message="Database connection failed",
+            operation="query",
+            table="profiles"
+        )
+        
+        self.assertEqual(exception.message, "Database connection failed")
+        self.assertEqual(exception.operation, "query")
+        self.assertEqual(exception.table, "profiles")
+
+    def test_external_service_error(self):
+        """Test ExternalServiceError exception."""
+        exception = ExternalServiceError(
+            message="External service error",
+            service="redis",
+            endpoint="cache"
+        )
+        
+        self.assertEqual(exception.message, "External service error")
+        self.assertEqual(exception.service, "redis")
+        self.assertEqual(exception.endpoint, "cache")
+
+
+class ValidationServiceTest(TestCase):
+    """Test cases for InputValidator."""
+    
+    def setUp(self):
+        self.validation_service = InputValidator()
+
+    def test_validate_string(self):
+        """Test string validation."""
+        # Valid string
+        result = self.validation_service.validate_string("Hello World", max_length=100)
+        self.assertTrue(result['valid'])
+        
+        # Invalid string (too long)
+        result = self.validation_service.validate_string("x" * 200, max_length=100)
+        self.assertFalse(result['valid'])
+        self.assertIn('max_length', result['errors'])
+
+    def test_validate_email(self):
+        """Test email validation."""
+        # Valid email
+        result = self.validation_service.validate_email("test@example.com")
+        self.assertTrue(result['valid'])
+        
+        # Invalid email
+        result = self.validation_service.validate_email("invalid-email")
+        self.assertFalse(result['valid'])
+        self.assertIn('format', result['errors'])
+
+    def test_validate_url(self):
+        """Test URL validation."""
+        # Valid URL
+        result = self.validation_service.validate_url("https://example.com")
+        self.assertTrue(result['valid'])
+        
+        # Invalid URL
+        result = self.validation_service.validate_url("not-a-url")
+        self.assertFalse(result['valid'])
+        self.assertIn('format', result['errors'])
+
+    def test_validate_uuid(self):
+        """Test UUID validation."""
+        # Valid UUID
+        valid_uuid = str(uuid.uuid4())
+        result = self.validation_service.validate_uuid(valid_uuid)
+        self.assertTrue(result['valid'])
+        
+        # Invalid UUID
+        result = self.validation_service.validate_uuid("not-a-uuid")
+        self.assertFalse(result['valid'])
+        self.assertIn('format', result['errors'])
+
+    def test_validate_json(self):
+        """Test JSON validation."""
+        # Valid JSON
+        valid_json = {"key": "value"}
+        result = self.validation_service.validate_json(valid_json)
+        self.assertTrue(result['valid'])
+        
+        # Invalid JSON
+        result = self.validation_service.validate_json("not-json")
+        self.assertFalse(result['valid'])
+        self.assertIn('format', result['errors'])
+
+    def test_validate_list(self):
+        """Test list validation."""
+        # Valid list
+        result = self.validation_service.validate_list(["item1", "item2"], max_items=10)
+        self.assertTrue(result['valid'])
+        
+        # Invalid list (too many items)
+        result = self.validation_service.validate_list(["item"] * 20, max_items=10)
+        self.assertFalse(result['valid'])
+        self.assertIn('max_items', result['errors'])
+
+    def test_validate_file(self):
+        """Test file validation."""
+        # Valid file
+        valid_file = SimpleUploadedFile("test.txt", b"content", content_type="text/plain")
+        result = self.validation_service.validate_file(valid_file, max_size=1024)
+        self.assertTrue(result['valid'])
+        
+        # Invalid file (too large)
+        large_file = SimpleUploadedFile("large.txt", b"x" * 2048, content_type="text/plain")
+        result = self.validation_service.validate_file(large_file, max_size=1024)
+        self.assertFalse(result['valid'])
+        self.assertIn('max_size', result['errors'])
+
+    def test_validate_chat_input(self):
+        """Test chat input validation."""
+        # Valid chat input
+        valid_input = {
+            'question': 'What programming languages do you know?',
+            'context_type': 'general'
+        }
+        result = self.validation_service.validate_chat_input(valid_input)
+        self.assertTrue(result['valid'])
+        
+        # Invalid chat input (missing question)
+        invalid_input = {'context_type': 'general'}
+        result = self.validation_service.validate_chat_input(invalid_input)
+        self.assertFalse(result['valid'])
+        self.assertIn('question', result['errors'])
+
+    def test_validate_job_analysis_input(self):
+        """Test job analysis input validation."""
+        # Valid job analysis input
+        valid_input = {
+            'job_requirements': 'Python developer position'
+        }
+        result = self.validation_service.validate_job_analysis_input(valid_input)
+        self.assertTrue(result['valid'])
+        
+        # Invalid job analysis input (missing requirements)
+        invalid_input = {}
+        result = self.validation_service.validate_job_analysis_input(invalid_input)
+        self.assertFalse(result['valid'])
+        self.assertIn('job_requirements', result['errors'])
+
+    def test_validate_project_data(self):
+        """Test project data validation."""
+        # Valid project data
+        valid_data = {
+            'title': 'Test Project',
+            'description': 'Test description',
+            'tech_stack': [{'name': 'Django'}]
+        }
+        result = self.validation_service.validate_project_data(valid_data)
+        self.assertTrue(result['valid'])
+        
+        # Invalid project data (missing title)
+        invalid_data = {
+            'description': 'Test description'
+        }
+        result = self.validation_service.validate_project_data(invalid_data)
+        self.assertFalse(result['valid'])
+        self.assertIn('title', result['errors'])
+
+    def test_validate_profile_data(self):
+        """Test profile data validation."""
+        # Valid profile data
+        valid_data = {
+            'name': 'John Doe',
+            'bio': 'Software developer',
+            'email': 'john@example.com'
+        }
+        result = self.validation_service.validate_profile_data(valid_data)
+        self.assertTrue(result['valid'])
+        
+        # Invalid profile data (missing name)
+        invalid_data = {
+            'bio': 'Software developer',
+            'email': 'john@example.com'
+        }
+        result = self.validation_service.validate_profile_data(invalid_data)
+        self.assertFalse(result['valid'])
+        self.assertIn('name', result['errors'])
+
+    def test_sanitize_input(self):
+        """Test input sanitization."""
+        # Test XSS prevention
+        malicious_input = '<script>alert("xss")</script>'
+        sanitized = self.validation_service.sanitize_input(malicious_input)
+        self.assertNotIn('<script>', sanitized)
+        
+        # Test SQL injection prevention
+        sql_input = "'; DROP TABLE users; --"
+        sanitized = self.validation_service.sanitize_input(sql_input)
+        self.assertNotIn('DROP TABLE', sanitized)
+
+    def test_validate_api_request(self):
+        """Test API request validation."""
+        # Valid request
+        valid_request = {
+            'method': 'POST',
+            'headers': {'Content-Type': 'application/json'},
+            'data': {'key': 'value'}
+        }
+        result = self.validation_service.validate_api_request(valid_request)
+        self.assertTrue(result['valid'])
+        
+        # Invalid request (missing Content-Type)
+        invalid_request = {
+            'method': 'POST',
+            'headers': {},
+            'data': {'key': 'value'}
+        }
+        result = self.validation_service.validate_api_request(invalid_request)
+        self.assertFalse(result['valid'])
+
+
+class LoggingServiceTest(TestCase):
+    """Test cases for APILogger."""
+    
+    def setUp(self):
+        self.logging_service = APILogger()
+
+    def test_log_api_request(self):
+        """Test API request logging."""
+        request_data = {
+            'method': 'POST',
+            'path': '/api/chat/',
+            'user_agent': 'Test Browser',
+            'ip_address': '192.168.1.1'
+        }
+        
+        # Should not raise exception
+        self.logging_service.log_api_request(request_data)
+
+    def test_log_api_response(self):
+        """Test API response logging."""
+        response_data = {
+            'status_code': 200,
+            'response_time': 1.5,
+            'response_size': 1024
+        }
+        
+        # Should not raise exception
+        self.logging_service.log_api_response(response_data)
+
+    def test_log_ai_service_call(self):
+        """Test AI service call logging."""
+        ai_data = {
+            'service': 'openai',
+            'operation': 'embedding',
+            'tokens_used': 100,
+            'cost': 0.01
+        }
+        
+        # Should not raise exception
+        self.logging_service.log_ai_service_call(ai_data)
+
+    def test_log_security_event(self):
+        """Test security event logging."""
+        security_data = {
+            'event_type': 'rate_limit_exceeded',
+            'severity': 'warning',
+            'ip_address': '192.168.1.1',
+            'details': 'Too many requests'
+        }
+        
+        # Should not raise exception
+        self.logging_service.log_security_event(security_data)
+
+    def test_log_database_operation(self):
+        """Test database operation logging."""
+        db_data = {
+            'operation': 'query',
+            'table': 'profiles',
+            'execution_time': 0.1,
+            'rows_affected': 1
+        }
+        
+        # Should not raise exception
+        self.logging_service.log_database_operation(db_data)
+
+    def test_log_cache_operation(self):
+        """Test cache operation logging."""
+        cache_data = {
+            'operation': 'get',
+            'key': 'test_key',
+            'hit': True,
+            'execution_time': 0.01
+        }
+        
+        # Should not raise exception
+        self.logging_service.log_cache_operation(cache_data)
+
+    def test_log_file_operation(self):
+        """Test file operation logging."""
+        file_data = {
+            'operation': 'upload',
+            'file_name': 'test.txt',
+            'file_size': 1024,
+            'success': True
+        }
+        
+        # Should not raise exception
+        self.logging_service.log_file_operation(file_data)
+
+    def test_log_error(self):
+        """Test error logging."""
+        error_data = {
+            'error_type': 'ValidationError',
+            'message': 'Invalid input',
+            'stack_trace': 'Traceback...',
+            'context': {'field': 'email'}
+        }
+        
+        # Should not raise exception
+        self.logging_service.log_error(error_data)
+
+    def test_set_request_context(self):
+        """Test request context setting."""
+        context = {
+            'request_id': 'test-123',
+            'user_id': 'user-456',
+            'session_id': 'session-789'
+        }
+        
+        # Should not raise exception
+        self.logging_service.set_request_context(context)
+
+    def test_clear_request_context(self):
+        """Test request context clearing."""
+        # Should not raise exception
+        self.logging_service.clear_request_context()
+
+
+class MonitoringServiceTest(TestCase):
+    """Test cases for SystemMonitor."""
+    
+    def setUp(self):
+        self.monitoring_service = SystemMonitor()
+
+    def test_health_checker_database(self):
+        """Test database health check."""
+        health_checker = HealthChecker()
+        result = health_checker.check_database()
+        
+        self.assertIn('status', result)
+        self.assertIn('response_time', result)
+        self.assertIn('details', result)
+
+    def test_health_checker_cache(self):
+        """Test cache health check."""
+        health_checker = HealthChecker()
+        result = health_checker.check_cache()
+        
+        self.assertIn('status', result)
+        self.assertIn('response_time', result)
+        self.assertIn('details', result)
+
+    def test_health_checker_ai_service(self):
+        """Test AI service health check."""
+        health_checker = HealthChecker()
+        result = health_checker.check_ai_service()
+        
+        self.assertIn('status', result)
+        self.assertIn('response_time', result)
+        self.assertIn('details', result)
+
+    def test_alert_manager_create_alert(self):
+        """Test alert creation."""
+        alert_manager = AlertManager()
+        alert = alert_manager.create_alert(
+            type='error',
+            message='Test alert',
+            severity='high',
+            source='test'
+        )
+        
+        self.assertEqual(alert['type'], 'error')
+        self.assertEqual(alert['message'], 'Test alert')
+        self.assertEqual(alert['severity'], 'high')
+        self.assertEqual(alert['source'], 'test')
+
+    def test_alert_manager_resolve_alert(self):
+        """Test alert resolution."""
+        alert_manager = AlertManager()
+        alert = alert_manager.create_alert(
+            type='error',
+            message='Test alert',
+            severity='high',
+            source='test'
+        )
+        
+        resolved = alert_manager.resolve_alert(alert['id'])
+        self.assertTrue(resolved)
+
+    def test_alert_manager_get_active_alerts(self):
+        """Test getting active alerts."""
+        alert_manager = AlertManager()
+        alert = alert_manager.create_alert(
+            type='error',
+            message='Test alert',
+            severity='high',
+            source='test'
+        )
+        
+        active_alerts = alert_manager.get_active_alerts()
+        self.assertGreater(len(active_alerts), 0)
+
+    def test_monitoring_service_health_check(self):
+        """Test monitoring service health check."""
+        result = self.monitoring_service.health_check()
+        
+        self.assertIn('database', result)
+        self.assertIn('cache', result)
+        self.assertIn('ai_service', result)
+        self.assertIn('overall', result)
+
+    def test_monitoring_service_system_status(self):
+        """Test monitoring service system status."""
+        result = self.monitoring_service.system_status()
+        
+        self.assertIn('health', result)
+        self.assertIn('alerts', result)
+        self.assertIn('performance', result)
+        self.assertIn('timestamp', result)
+
+    def test_monitoring_service_performance_metrics(self):
+        """Test monitoring service performance metrics."""
+        result = self.monitoring_service.performance_metrics()
+        
+        self.assertIn('api_requests', result)
+        self.assertIn('response_times', result)
+        self.assertIn('error_rates', result)
+        self.assertIn('ai_service_usage', result)
+
+    def test_monitoring_service_run_monitoring_cycle(self):
+        """Test monitoring service cycle."""
+        result = self.monitoring_service.run_monitoring_cycle()
+        
+        self.assertIn('health_score', result)
+        self.assertIn('alerts_created', result)
+        self.assertIn('performance_metrics', result)
+        self.assertIn('timestamp', result)
+
+
+class APIErrorHandlingTest(TestCase):
+    """Test cases for API error handling integration."""
+    
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_custom_exception_handler(self):
+        """Test custom exception handler."""
+        from api.exceptions import custom_exception_handler
+        from rest_framework.views import APIView
+        from rest_framework.request import Request
+        
+        # Create mock exception
+        exception = CustomValidationError("Test validation error")
+        context = {'view': APIView(), 'request': Request()}
+        
+        response = custom_exception_handler(exception, context)
+        
+        self.assertIsNotNone(response)
+        self.assertIn('error', response.data)
+        self.assertIn('message', response.data['error'])
+        self.assertIn('type', response.data['error'])
+
+    def test_api_validation_error_response(self):
+        """Test API validation error response."""
+        # Test with invalid data
+        chat_url = reverse('chat')
+        invalid_data = {}  # Missing required fields
+        
+        response = self.client.post(chat_url, invalid_data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('error', response.data)
+
+    def test_api_not_found_error_response(self):
+        """Test API not found error response."""
+        # Test with non-existent resource
+        fake_id = uuid.uuid4()
+        profile_url = reverse('profile-detail', kwargs={'profile_id': fake_id})
+        
+        response = self.client.get(profile_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn('error', response.data)
+
+    def test_api_internal_server_error_response(self):
+        """Test API internal server error response."""
+        # Mock internal error
+        with patch('api.views.ProfileViewSet.get_queryset') as mock_queryset:
+            mock_queryset.side_effect = Exception("Internal error")
+            
+            profile_url = reverse('profile-list')
+            response = self.client.get(profile_url)
+            
+            self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+            self.assertIn('error', response.data)
+
+    def test_api_rate_limit_error_response(self):
+        """Test API rate limit error response."""
+        chat_url = reverse('chat')
+        chat_data = {'question': 'Test question'}
+        
+        # Make multiple requests to trigger rate limiting
+        for i in range(35):  # Exceeds 30/hour limit
+            response = self.client.post(chat_url, chat_data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertIn('error', response.data)
+
+    def test_api_timeout_error_response(self):
+        """Test API timeout error response."""
+        with patch('api.views.rag_service.RAGService.query') as mock_rag:
+            import asyncio
+            async def slow_query(*args, **kwargs):
+                await asyncio.sleep(15)  # Longer than timeout
+                return {'answer': 'Slow response'}
+            
+            mock_rag.side_effect = slow_query
+            
+            chat_url = reverse('chat')
+            chat_data = {
+                'question': 'Test question',
+                'context_type': 'general'
+            }
+            response = self.client.post(chat_url, chat_data, format='json')
+            
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertIn('retry', response.data)
+            self.assertTrue(response.data['retry'])
+
+
+class ErrorRecoveryTest(TestCase):
+    """Test cases for error recovery mechanisms."""
+    
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_database_connection_recovery(self):
+        """Test database connection recovery."""
+        # Mock database error
+        with patch('django.db.connection.cursor') as mock_cursor:
+            mock_cursor.side_effect = Exception("Database connection failed")
+            
+            # Should handle error gracefully
+            profile_url = reverse('profile-list')
+            response = self.client.get(profile_url)
+            
+            self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def test_cache_failure_recovery(self):
+        """Test cache failure recovery."""
+        # Mock cache error
+        with patch('django.core.cache.cache.get') as mock_cache_get:
+            mock_cache_get.side_effect = Exception("Cache connection failed")
+            
+            # Should handle error gracefully
+            profile_url = reverse('profile-list')
+            response = self.client.get(profile_url)
+            
+            # Should still work without cache
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_ai_service_failure_recovery(self):
+        """Test AI service failure recovery."""
+        # Mock AI service error
+        with patch('api.views.rag_service.RAGService.query') as mock_rag:
+            mock_rag.side_effect = Exception("AI service unavailable")
+            
+            chat_url = reverse('chat')
+            chat_data = {
+                'question': 'Test question',
+                'context_type': 'general'
+            }
+            response = self.client.post(chat_url, chat_data, format='json')
+            
+            self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+            self.assertIn('error', response.data)
+
+    def test_file_processing_failure_recovery(self):
+        """Test file processing failure recovery."""
+        # Mock file processing error
+        with patch('api.views.analysis_service.JobAnalysisService.analyze_job') as mock_analysis:
+            mock_analysis.side_effect = Exception("File processing failed")
+            
+            test_file = SimpleUploadedFile(
+                "test.txt",
+                b"Test content",
+                content_type="text/plain"
+            )
+            
+            job_analysis_url = reverse('job_analysis')
+            data = {
+                'job_requirements': 'Test requirements',
+                'job_file': test_file
+            }
+            response = self.client.post(job_analysis_url, data, format='multipart')
+            
+            self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+            self.assertIn('error', response.data)
+
+    def test_validation_failure_recovery(self):
+        """Test validation failure recovery."""
+        # Test with invalid input
+        chat_url = reverse('chat')
+        invalid_data = {
+            'question': '',  # Empty question
+            'context_type': 'invalid_type'  # Invalid context type
+        }
+        
+        response = self.client.post(chat_url, invalid_data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('error', response.data)
+
+    def test_network_timeout_recovery(self):
+        """Test network timeout recovery."""
+        # Mock network timeout
+        with patch('api.views.rag_service.RAGService.query') as mock_rag:
+            import asyncio
+            async def timeout_query(*args, **kwargs):
+                await asyncio.sleep(20)  # Longer than timeout
+                return {'answer': 'Timeout response'}
+            
+            mock_rag.side_effect = timeout_query
+            
+            chat_url = reverse('chat')
+            chat_data = {
+                'question': 'Test question',
+                'context_type': 'general'
+            }
+            response = self.client.post(chat_url, chat_data, format='json')
+            
+            # Should handle timeout gracefully
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertIn('retry', response.data)
